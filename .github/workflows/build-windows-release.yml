@@ -1,0 +1,68 @@
+name: build-windows-release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag/version label to use for the artifact name'
+        required: false
+        default: 'manual'
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache vcpkg installed
+        uses: actions/cache@v4
+        with:
+          path: build/vcpkg
+          key: vcpkg-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
+
+      - name: Cache FetchContent (ImGui / PDFium / stb)
+        uses: actions/cache@v4
+        with:
+          path: build/fetched
+          key: fetched-${{ runner.os }}-${{ hashFiles('CMakeLists.txt') }}
+
+      - name: Configure
+        env:
+          VCPKG_ROOT: ${{ env.VCPKG_INSTALLATION_ROOT }}
+        run: cmake --preset ci-windows-x64
+
+      - name: Build (Release)
+        run: cmake --build --preset ci-release
+
+      - name: Package (CPack ZIP)
+        working-directory: build/ci-windows-x64
+        run: cpack -G ZIP -C Release
+
+      - name: Resolve artifact name
+        id: artifact
+        shell: pwsh
+        run: |
+          $zip = Get-ChildItem build/ci-windows-x64 -Filter '*.zip' | Select-Object -First 1
+          if (-not $zip) { throw "no zip produced by CPack" }
+          "name=$($zip.Name)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "path=$($zip.FullName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.artifact.outputs.name }}
+          path: ${{ steps.artifact.outputs.path }}
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.artifact.outputs.path }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true

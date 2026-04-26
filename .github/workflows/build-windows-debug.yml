@@ -1,0 +1,36 @@
+name: build-windows-debug
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache vcpkg installed
+        uses: actions/cache@v4
+        with:
+          path: build/vcpkg
+          key: vcpkg-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
+
+      - name: Cache FetchContent (ImGui / PDFium / stb)
+        uses: actions/cache@v4
+        with:
+          path: build/fetched
+          key: fetched-${{ runner.os }}-${{ hashFiles('CMakeLists.txt') }}
+
+      - name: Configure
+        env:
+          VCPKG_ROOT: ${{ env.VCPKG_INSTALLATION_ROOT }}
+        run: cmake --preset ci-windows-x64
+
+      - name: Build (Debug)
+        run: cmake --build --preset ci-debug
