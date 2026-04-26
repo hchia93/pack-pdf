@@ -4,7 +4,7 @@
 
 ![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)
 ![Platform: Windows](https://img.shields.io/badge/Platform-Windows-blue.svg)
-![Version: v0.1](https://img.shields.io/badge/Version-v0.1-orange.svg)
+![Version: v1.0](https://img.shields.io/badge/Version-v1.0-orange.svg)
 
 <div align="center">
 
@@ -182,9 +182,7 @@ src/
 
 ## 路线图
 
-- v0.1：窗口、拖拽接收、时间线列表、按行 PDF 范围 / 图片选项、PDF + JPEG + PNG 合成通道、输出文件夹 / 文件名、主题菜单、配置持久化
-- v0.5：`pack-pdf compose` CLI，与 GUI 共用同一份 PDFium 引擎；GUI Pack 按钮通过 spawn 子进程走 CLI 路径 **（当前）**
-- v1.0：portable zip 发布（pack-pdf.exe + pdfium.dll + glfw3.dll，解压即用，不带安装器）
+- v1.0：portable zip 发布（pack-pdf.exe + pdfium.dll + glfw3.dll，解压即用，不带安装器）**（当前）**
 
 ## 许可证
 

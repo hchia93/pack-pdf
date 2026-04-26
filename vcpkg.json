@@ -1,6 +1,6 @@
 {
   "name": "pack-pdf",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Timeline-based PDF assembly. Drag, splice, pack. Replay from CLI, callable from AI.",
   "homepage": "https://github.com/hchia93/pack-pdf",
   "dependencies": [

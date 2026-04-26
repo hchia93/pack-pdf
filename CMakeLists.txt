@@ -6,7 +6,7 @@ if(POLICY CMP0135)
     cmake_policy(SET CMP0135 NEW)
 endif()
 
-project(pack-pdf VERSION 0.1.0 LANGUAGES CXX)
+project(pack-pdf VERSION 1.0.0 LANGUAGES CXX)
 
 option(HIDE_CONSOLE "Hide console window on Windows GUI build" ON)
 
@@ -181,16 +181,15 @@ add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
 )
 
 # ---- Install / package ----
-# `cmake --install . --prefix <dir>` lays out the redistributable tree:
+# `cmake --install . --prefix <dir>` lays out the portable tree:
 #   <prefix>/pack-pdf.exe
 #   <prefix>/pdfium.dll
+#   <prefix>/glfw3.dll
 #   <prefix>/README.md
 #   <prefix>/userdata/config.ini   <-- shipped baseline, edited in place
-# userdata/config.ini lives in the source repo (git-tracked) and rides into
-# every package. The app reads/writes it directly; no separate "default"
-# template, no first-run seeding from code.
 install(TARGETS ${PROJECT_NAME} RUNTIME DESTINATION .)
 install(FILES     ${pdfium_SOURCE_DIR}/bin/pdfium.dll DESTINATION .)
+install(IMPORTED_RUNTIME_ARTIFACTS glfw RUNTIME DESTINATION .)
 install(FILES     ${CMAKE_CURRENT_SOURCE_DIR}/README.md DESTINATION .)
 install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/userdata DESTINATION .)
 

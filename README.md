@@ -4,7 +4,7 @@
 
 ![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)
 ![Platform: Windows](https://img.shields.io/badge/Platform-Windows-blue.svg)
-![Version: v0.1](https://img.shields.io/badge/Version-v0.1-orange.svg)
+![Version: v1.0](https://img.shields.io/badge/Version-v1.0-orange.svg)
 
 <div align="center">
 
@@ -182,9 +182,7 @@ src/
 
 ## Roadmap
 
-- v0.1 — window, drag-drop ingest, timeline list, per-row PDF range / image options, compose pass for PDF + JPEG + PNG, output folder / filename, theme menu, config persistence
-- v0.5 — `pack-pdf compose` CLI sharing one PDFium engine with the GUI; the GUI Pack button spawns this same exe and goes through the CLI path **(current)**
-- v1.0 — portable zip release (pack-pdf.exe + pdfium.dll + glfw3.dll, unzip and run, no installer)
+- v1.0 — portable zip release (pack-pdf.exe + pdfium.dll + glfw3.dll, unzip and run, no installer) **(current)**
 
 ## License
 
