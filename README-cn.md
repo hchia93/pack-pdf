@@ -39,7 +39,7 @@
 - **频繁合并 PDF 的人。** 每周要拼报表、扫描表单、案件材料的人，那种逐文件弹窗的操作模式很快就会让人厌倦。PackPDF 把整个组装过程当作一份可编辑的清单
 - **手里有敏感文件的人。** 任何不想上传的内容，合同、病历、财务报表、内部文档，都必须留在本地。浏览器工具和 SaaS 上传服务因为政策或者本能就被排除了，PackPDF 完全不联网
 - **被付费墙挡住的人。** 合并几个 PDF 加几张截图，在任何合理的产品里都不该是会员功能，但好几个主流工具偏偏卡在那里限频或诱导付费。PackPDF 就是一个 exe
-- **想交给 AI 代理处理的人。** 你可以让大模型帮你合并 PDF，但每轮 "不对，第 5 页和第 6 页对调，第 12 页删掉" 都消耗上下文和时间，靠对话也很难精确控制顺序。计划中的 PackPDF CLI（见路线图）就是这条流水线的代理可调用版本：确定的语法、一条命令、不需要往返
+- **想交给 AI 代理处理的人。** 你可以让大模型帮你合并 PDF，但每轮 "不对，第 5 页和第 6 页对调，第 12 页删掉" 都消耗上下文和时间，靠对话也很难精确控制顺序。`pack-pdf compose` CLI 就是这条流水线的代理可调用版本：确定的语法、一条命令、不需要往返
 
 ## GUI 用法
 
@@ -54,24 +54,66 @@
 
 合成阶段为图片生成 A4 纵向页面，把超大 PDF 页面缩到 A4 范围内，最终通过 PDFium 写出一个文件。
 
-## CLI 用法（计划，v0.5）
+## CLI 用法
 
-本节描述**目标语法**。CLI 在 v0.5 路线图上，PackPDF 当前是 v0.1，仅提供 GUI。下面这些命令暂时还不存在。
+GUI 的 Pack 按钮其实就是把时间线折叠成一条 `pack-pdf compose ...` 命令，spawn 自己执行。同一个 exe，同一份引擎，AI 和脚本走的是 GUI 走的同一条路径。
 
 ```
-packpdf add A.pdf{1-7,9,12-15}      # 一次添加多个不重叠的范围
-packpdf add B.png                    # 把图片当作一页
-packpdf remove A.pdf{2-3}            # 从已添加的段中扣掉若干页
-packpdf list                         # 显示当前计划
-packpdf compose -o out.pdf           # 写出输出文件
-
-# 适合 AI / 脚本的无状态一次性形式：
-packpdf compose "A.pdf{1-7},B.png,A.pdf{8-10}" -o out.pdf
+pack-pdf compose <token>... -o <output.pdf>
 ```
 
-范围语法 `{a-b,c,d-e}`，全部 1 起始，单个段内的范围不允许重叠。校验在解析时完成，写错语法在读任何文件之前就会被拒掉。
+每个 token 描述一个文件 + 选项，按时间线顺序写在命令里。
 
-无状态形式才是代理使用的关键：大模型可以根据用户的需求拼出逗号分隔的计划，一次调用 `packpdf compose` 就能完成，不依赖 shell 会话也不需要逐步累积状态。同一份计划可以重现，也可以做 diff。
+### Token 语法
+
+<div align="center">
+
+| 形式 | 含义 |
+|---|---|
+| `A.pdf` | 全部页 |
+| `A.pdf{5}` | 第 5 页 |
+| `A.pdf{1-7}` | 第 1 到第 7 页（1 起始，闭区间）|
+| `A.pdf{!5}` | 排除第 5 页 |
+| `A.pdf{!1-3}` | 排除 1 到 3 页 |
+| `B.jpg` | 默认 portrait + fit |
+| `B.jpg{landscape,merge}` | 横向，与下一张横向自动合并 |
+| `C.png{orig,pad}` | 原始尺寸，加 0.5" 白边 |
+| `D.jpg{landscape,flip,merge,pad}` | 多个选项逗号分隔 |
+
+</div>
+
+图片选项：
+
+<div align="center">
+
+| 选项 | 默认 | 说明 |
+|---|---|---|
+| `portrait` / `landscape` | portrait | 旋转方向 |
+| `flip` | off | 180° 翻转，处理倒拍 |
+| `fit` / `orig` | fit | fit 把小图放大铺满，orig 保持原始像素 |
+| `merge` | off | 与下一张横向图片堆到同一张 A4，仅 landscape 有效 |
+| `pad` | off | 加 0.5 英寸白边 |
+
+</div>
+
+### 例子
+
+```bat
+:: 报表前 7 页 + 一张截图 + 报表第 12 到 15 页
+pack-pdf compose A.pdf{1-7} screenshot.png A.pdf{12-15} -o out.pdf
+
+:: 两张横向照片堆到一张 A4
+pack-pdf compose left.jpg{landscape,merge} right.jpg{landscape} -o stacked.pdf
+
+:: PowerShell 里要把含 {} 的 token 引起来
+pack-pdf compose "A.pdf{1-7}" B.png -o out.pdf
+```
+
+### 给 AI 用
+
+固定语法、一次调用、stateless。不依赖 shell 会话状态，同一份命令可重现、可 diff。`pack-pdf compose --help` 直接打印这套规则。
+
+退出码：0 成功，1 用法错误，2 token 解析错误，3 合成错误（文件读不到、PDFium 失败等）。
 
 ## 构建
 
@@ -116,6 +158,21 @@ build/
 
 `fetched/` 和 `vcpkg/` 与 per-preset CMake 目录是兄弟关系，所以删掉 `build/windows-x64/` 不会重新下载 PDFium（约 10 MB）也不会重装 vcpkg 端口。彻底清空：跑 `generate.bat`（或者手动 `rm -rf build/`）。
 
+### 源码布局
+
+按角色分三层：
+
+```
+src/
+├── App/        # 入口 + GUI + CLI 主分发：main, AppMainWindow, AppTheme, AppUI, Cli
+├── File/       # 数据模型 + PDFium 引擎 + 图片缓存：TimelineRow, Composer, ImageCache, FileTypes 等
+└── Selector/   # 时间线行内的 ImGui 子组件：PDFPageRangeSelector, ImageOptionsSelector
+```
+
+`#include` 全部以 `src/` 为根（`#include "App/Cli.h"`），子目录之间显式引用，避免相对路径漂移。
+
+`TimelineRow = path + variant<PDFOptions, ImageOptions>`，PDF 行和图片行靠 variant 分类型，selector 直接吃对应 options 类型，无效组合编译期就被拒。
+
 ## 依赖
 
 - [Dear ImGui](https://github.com/ocornut/imgui)，UI（FetchContent，无需安装）
@@ -125,8 +182,8 @@ build/
 
 ## 路线图
 
-- v0.1：窗口、拖拽接收、时间线列表、按行 PDF 范围 / 图片选项、PDF + JPEG + PNG 合成通道、输出文件夹 / 文件名、主题菜单、配置持久化 **（当前）**
-- v0.5：CLI，与 GUI 共用同一份 `Composer` 引擎，通过无状态命令驱动：`packpdf compose "A.pdf{1-7},B.png,A.pdf{8-10}" -o out.pdf`
+- v0.1：窗口、拖拽接收、时间线列表、按行 PDF 范围 / 图片选项、PDF + JPEG + PNG 合成通道、输出文件夹 / 文件名、主题菜单、配置持久化
+- v0.5：`pack-pdf compose` CLI，与 GUI 共用同一份 PDFium 引擎；GUI Pack 按钮通过 spawn 子进程走 CLI 路径 **（当前）**
 - v1.0：portable zip 发布（pack-pdf.exe + pdfium.dll + glfw3.dll，解压即用，不带安装器）
 
 ## 许可证

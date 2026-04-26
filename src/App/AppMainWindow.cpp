@@ -1,9 +1,12 @@
-#include "AppMainWindow.h"
+#include "App/AppMainWindow.h"
 
-#include "Composer.h"
-#include "ImageOptionsSelector.h"
-#include "PageRangeSelector.h"
-#include "UiStyle.h"
+#include "App/AppUI.h"
+#include "App/Cli.h"
+#include "File/Composer.h"
+#include "File/FileTypes.h"
+#include "File/ImageHelpers.h"
+#include "Selector/ImageOptionsSelector.h"
+#include "Selector/PDFPageRangeSelector.h"
 
 #include <imgui.h>
 #include <algorithm>
@@ -13,6 +16,7 @@
 #include <fstream>
 #include <optional>
 #include <string>
+#include <variant>
 
 #ifdef _WIN32
   #define WIN32_LEAN_AND_MEAN
@@ -26,28 +30,23 @@ namespace packpdf
 {
     namespace
     {
-        // Returns nullopt for any extension PackPDF cannot process (e.g.
-        // .mp4, .docx, no extension at all). Callers drop those silently
-        // instead of letting them slip in as bogus PDF segments.
-        std::optional<FileExtension> FileTypeFromExtension(const std::string& path)
+        // Build the variant-tagged row for the dragged-in path. Caller already
+        // verified the extension via FileExtensionFromPath.
+        TimelineRow MakeRowFromPath(std::string utf8Path, FileExtension ext)
         {
-            std::filesystem::path p(path);
-            std::string ext = p.extension().string();
-            std::transform(ext.begin(), ext.end(), ext.begin(),
-                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-            if (ext == ".pdf")
+            TimelineRow row;
+            row.path = std::move(utf8Path);
+            if (ext == FileExtension::PDF)
             {
-                return FileExtension::PDF;
+                row.options = PDFOptions{};
             }
-            if (ext == ".jpg" || ext == ".jpeg")
+            else
             {
-                return FileExtension::JPEG;
+                ImageOptions img;
+                img.format = ImageFormatFromExtension(ext);
+                row.options = img;
             }
-            if (ext == ".png")
-            {
-                return FileExtension::PNG;
-            }
-            return std::nullopt;
+            return row;
         }
 
         ImU32 FileTypeColor(FileExtension k)
@@ -72,12 +71,22 @@ namespace packpdf
             return "?";
         }
 
-        // Renders a two-section colored pill: dark number section on the left
-        // (the page-number "overlay"), bright file-type section on the right.
-        // Total width is fixed across all calls so the badge column lines up
-        // across rows regardless of digit count or whether the row is a
-        // merge partner. `pageNumber == 0` leaves the number slot empty
-        // (used for merge-partner rows that inherit the leader's number).
+        // The badge needs a single tri-state at the row level. Map the row
+        // variant (and image format) back to the FileExtension enum so the
+        // existing color / label tables stay one switch each.
+        FileExtension RowFileExtension(const TimelineRow& row)
+        {
+            if (std::holds_alternative<PDFOptions>(row.options))
+            {
+                return FileExtension::PDF;
+            }
+            const auto& img = std::get<ImageOptions>(row.options);
+            return (img.format == ImageFormat::PNG) ? FileExtension::PNG
+                                                    : FileExtension::JPEG;
+        }
+
+        // Two-section pill: dark page-number slot left, file-type slot right.
+        // Width is fixed so badges line up. pageNumber=0 blanks the number slot.
         void DrawFileTypeIcon(FileExtension k, int pageNumber)
         {
             const char* typeLabel = FileTypeLabel(k);
@@ -95,65 +104,34 @@ namespace packpdf
 
             // Full pill in type color, then darken the left section with a
             // translucent black overlay to carve out the number area.
-            dl->AddRectFilled(pos, ImVec2(pos.x + totalW, pos.y + h),
-                              typeBg, h * 0.25f);
-            dl->AddRectFilled(pos, ImVec2(pos.x + numSecW, pos.y + h),
-                              IM_COL32(0, 0, 0, 110), h * 0.25f,
-                              ImDrawFlags_RoundCornersLeft);
+            dl->AddRectFilled(pos, ImVec2(pos.x + totalW, pos.y + h), typeBg, h * 0.25f);
+            dl->AddRectFilled(pos, ImVec2(pos.x + numSecW, pos.y + h), IM_COL32(0, 0, 0, 110), h * 0.25f, ImDrawFlags_RoundCornersLeft);
 
             if (pageNumber > 0)
             {
                 char buf[16];
                 std::snprintf(buf, sizeof(buf), "%d", pageNumber);
                 const ImVec2 nts = ImGui::CalcTextSize(buf);
-                dl->AddText(ImVec2(pos.x + (numSecW - nts.x) * 0.5f,
-                                   pos.y + (h - nts.y) * 0.5f),
-                            IM_COL32_WHITE, buf);
+                dl->AddText(ImVec2(pos.x + (numSecW - nts.x) * 0.5f, pos.y + (h - nts.y) * 0.5f), IM_COL32_WHITE, buf);
             }
 
             const float typeX = pos.x + numSecW;
             const ImVec2 tts  = ImGui::CalcTextSize(typeLabel);
-            dl->AddText(ImVec2(typeX + (typeSecW - tts.x) * 0.5f,
-                               pos.y + (h - tts.y) * 0.5f),
-                        IM_COL32_WHITE, typeLabel);
+            dl->AddText(ImVec2(typeX + (typeSecW - tts.x) * 0.5f, pos.y + (h - tts.y) * 0.5f), IM_COL32_WHITE, typeLabel);
 
             ImGui::Dummy(ImVec2(totalW, h));
         }
 
-        // Square close button. Picks up Button / ButtonHovered / ButtonActive
-        // from the active theme as the background, then draws two diagonal
-        // lines in the Text color forming an X. Returns true on click,
-        // matching ImGui::Button's contract.
         bool XButton(const char* str_id, ImVec2 size)
         {
-            const ImVec2 pos     = ImGui::GetCursorScreenPos();
-            const bool   clicked = ImGui::InvisibleButton(str_id, size);
-            const bool   hovered = ImGui::IsItemHovered();
-            const bool   held    = ImGui::IsItemActive();
-
-            const ImU32 bg = ImGui::GetColorU32(
-                  held    ? ImGuiCol_ButtonActive
-                : hovered ? ImGuiCol_ButtonHovered
-                          : ImGuiCol_Button);
-            const ImU32 fg = ImGui::GetColorU32(ImGuiCol_Text);
-
-            ImDrawList* dl = ImGui::GetWindowDrawList();
-            dl->AddRectFilled(pos,
-                              ImVec2(pos.x + size.x, pos.y + size.y),
-                              bg, ImGui::GetStyle().FrameRounding);
-
-            // Inset the cross so the X reads as an icon rather than filling
-            // the whole button face.
-            const float pad   = std::min(size.x, size.y) * 0.30f;
-            const float thick = std::max(1.0f, ImGui::GetFontSize() * 0.12f);
-            dl->AddLine(ImVec2(pos.x + pad,           pos.y + pad           ),
-                        ImVec2(pos.x + size.x - pad,  pos.y + size.y - pad  ),
-                        fg, thick);
-            dl->AddLine(ImVec2(pos.x + size.x - pad,  pos.y + pad           ),
-                        ImVec2(pos.x + pad,           pos.y + size.y - pad  ),
-                        fg, thick);
-
-            return clicked;
+            return Ui::IconButton(str_id, size, [](ImDrawList* dl, ImVec2 pos, ImVec2 sz, ImU32 /*frameBg*/)
+            {
+                const ImU32 fg    = ImGui::GetColorU32(ImGuiCol_Text);
+                const float pad   = std::min(sz.x, sz.y) * 0.30f;
+                const float thick = std::max(1.0f, ImGui::GetFontSize() * 0.12f);
+                dl->AddLine(ImVec2(pos.x + pad, pos.y + pad), ImVec2(pos.x + sz.x - pad, pos.y + sz.y - pad), fg, thick);
+                dl->AddLine(ImVec2(pos.x + sz.x - pad, pos.y + pad), ImVec2(pos.x + pad, pos.y + sz.y - pad), fg, thick);
+            });
         }
 
         bool FileExists(const char* path)
@@ -162,10 +140,8 @@ namespace packpdf
             return std::filesystem::exists(path, ec);
         }
 
-        // Extract the trailing filename from a UTF-8 path. Walks bytes
-        // directly rather than going through std::filesystem::path so we
-        // bypass the std::string → ANSI codepage conversion that would
-        // mojibake CJK characters on Windows.
+        // Byte-wise basename so CJK paths survive on Windows (std::filesystem
+        // would round-trip through the ANSI codepage and mojibake them).
         std::string FilenameFromPath(const std::string& utf8Path)
         {
             const size_t cut = utf8Path.find_last_of("/\\");
@@ -195,21 +171,17 @@ namespace packpdf
             return std::max(0, total - spanLen);  // Exclude
         }
 
-        // Renders the image preview tooltip for a JPG/PNG segment. Pulls the
-        // exact same A4 page-placement math the actual PDF compose pass uses
-        // (Composer::ComputeImagePageLayout), so the preview shows the
-        // rendered page with whitespace / padding exactly where it will land
-        // in the output file.
-        void DrawHoverPreview(const ImageCache::Entry& entry, const Segment& seg)
+        // Image preview tooltip — uses the same A4 placement math as the
+        // compose pass so what you see is what gets written.
+        void DrawHoverPreview(const ImageCache::Entry& entry, const std::string& path, const ImageOptions& opts)
         {
             if (entry.w <= 0 || entry.h <= 0)
             {
                 return;
             }
 
-            const ImagePageLayout L = ComputeImagePageLayout(entry.w, entry.h, seg);
-            if (L.pageW <= 0.0 || L.pageH <= 0.0
-                || L.imgW <= 0.0 || L.imgH <= 0.0) return;
+            const ImagePageLayout L = ComputeImagePageLayout(entry.w, entry.h, opts);
+            if (L.pageW <= 0.0 || L.pageH <= 0.0 || L.imgW <= 0.0 || L.imgH <= 0.0) return;
 
             // Cap the long axis to ~280px. Page is always A4 portrait so the
             // preview is portrait too.
@@ -225,22 +197,21 @@ namespace packpdf
             const float imgX  = static_cast<float>(L.imgX) * scale;
             const float imgY  = pageH - static_cast<float>(L.imgY) * scale - imgH;
 
-            // UV mapping per CCW rotation; corners listed clockwise from
-            // top-left (matching AddImageQuad's expected vertex order).
+            // UV mapping per CW rotation; corners clockwise from top-left.
             ImVec2 uvA, uvB, uvC, uvD;
-            switch (((L.rotationCcw % 360) + 360) % 360)
+            switch (((L.rotation % 360) + 360) % 360)
             {
                 default:
                 case 0:   uvA = {0,0}; uvB = {1,0}; uvC = {1,1}; uvD = {0,1}; break;
-                case 90:  uvA = {1,0}; uvB = {1,1}; uvC = {0,1}; uvD = {0,0}; break;
+                case 90:  uvA = {0,1}; uvB = {0,0}; uvC = {1,0}; uvD = {1,1}; break;
                 case 180: uvA = {1,1}; uvB = {0,1}; uvC = {0,0}; uvD = {1,0}; break;
-                case 270: uvA = {0,1}; uvB = {0,0}; uvC = {1,0}; uvD = {1,1}; break;
+                case 270: uvA = {1,0}; uvB = {1,1}; uvC = {0,1}; uvD = {0,0}; break;
             }
 
             ImGui::BeginTooltip();
 
             // Center both rows on the wider of (path text, page rect).
-            const float pathW    = ImGui::CalcTextSize(seg.path.c_str()).x;
+            const float pathW    = ImGui::CalcTextSize(path.c_str()).x;
             const float contentW = std::max(pathW, pageW);
             const float baseX    = ImGui::GetCursorPosX();
 
@@ -248,7 +219,7 @@ namespace packpdf
             {
                 ImGui::SetCursorPosX(baseX + (contentW - pathW) * 0.5f);
             }
-            ImGui::TextUnformatted(seg.path.c_str());
+            ImGui::TextUnformatted(path.c_str());
 
             if (pageW < contentW)
             {
@@ -269,8 +240,7 @@ namespace packpdf
             const ImVec2 b{ p.x + imgX + imgW, p.y + imgY        };
             const ImVec2 c{ p.x + imgX + imgW, p.y + imgY + imgH };
             const ImVec2 d{ p.x + imgX,        p.y + imgY + imgH };
-            dl->AddImageQuad(reinterpret_cast<ImTextureID>(static_cast<intptr_t>(entry.tex)),
-                             a, b, c, d, uvA, uvB, uvC, uvD);
+            dl->AddImageQuad(reinterpret_cast<ImTextureID>(static_cast<intptr_t>(entry.tex)), a, b, c, d, uvA, uvB, uvC, uvD);
 
             ImGui::Dummy(ImVec2(pageW, pageH));
             ImGui::EndTooltip();
@@ -283,11 +253,9 @@ namespace packpdf
             {
                 return {};
             }
-            int n = MultiByteToWideChar(CP_UTF8, 0, s.data(),
-                                        static_cast<int>(s.size()), nullptr, 0);
+            int n = MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), nullptr, 0);
             std::wstring w(static_cast<size_t>(n), L'\0');
-            MultiByteToWideChar(CP_UTF8, 0, s.data(),
-                                static_cast<int>(s.size()), w.data(), n);
+            MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), w.data(), n);
             return w;
         }
 
@@ -338,11 +306,9 @@ namespace packpdf
         std::string PickFolderDialog(const std::string& initialDirUtf8)
         {
             std::string result;
-            HRESULT hrInit = CoInitializeEx(nullptr,
-                                            COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+            HRESULT hrInit = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
             IFileOpenDialog* dlg = nullptr;
-            if (SUCCEEDED(CoCreateInstance(CLSID_FileOpenDialog, nullptr,
-                                           CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dlg))))
+            if (SUCCEEDED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dlg))))
             {
                 DWORD opts = 0;
                 dlg->GetOptions(&opts);
@@ -355,8 +321,7 @@ namespace packpdf
                     {
                         std::wstring wInit = Utf8ToWide(initialDirUtf8);
                         IShellItem* item = nullptr;
-                        if (SUCCEEDED(SHCreateItemFromParsingName(
-                                wInit.c_str(), nullptr, IID_PPV_ARGS(&item))))
+                        if (SUCCEEDED(SHCreateItemFromParsingName(wInit.c_str(), nullptr, IID_PPV_ARGS(&item))))
                         {
                             dlg->SetFolder(item);
                             item->Release();
@@ -390,9 +355,139 @@ namespace packpdf
         bool OpenInExplorer(const std::string& pathUtf8)
         {
             std::wstring w = Utf8ToWide(pathUtf8);
-            HINSTANCE r = ShellExecuteW(nullptr, L"open", w.c_str(),
-                                        nullptr, nullptr, SW_SHOWNORMAL);
+            HINSTANCE r = ShellExecuteW(nullptr, L"open", w.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
             return reinterpret_cast<INT_PTR>(r) > 32;
+        }
+
+        // Path of the currently running pack-pdf.exe; the GUI re-spawns this
+        // exact binary with the `compose` subcommand so the CLI and GUI share
+        // a single PDFium engine.
+        std::wstring SelfExePath()
+        {
+            wchar_t buf[MAX_PATH];
+            DWORD n = ::GetModuleFileNameW(nullptr, buf, MAX_PATH);
+            if (n == 0 || n == MAX_PATH) return {};
+            return std::wstring(buf, n);
+        }
+
+        // CommandLineToArgvW's exact inverse — quotes + backslash-doubling.
+        // Doesn't escape cmd.exe metacharacters; we feed CreateProcessW directly.
+        std::wstring WinQuote(const std::wstring& a)
+        {
+            if (!a.empty() && a.find_first_of(L" \t\n\v\"") == std::wstring::npos)
+            {
+                return a;
+            }
+            std::wstring out = L"\"";
+            int slashes = 0;
+            for (wchar_t c : a)
+            {
+                if (c == L'\\')
+                {
+                    ++slashes;
+                    out += c;
+                }
+                else if (c == L'"')
+                {
+                    out.append(static_cast<size_t>(slashes), L'\\');
+                    out += L'\\';
+                    out += L'"';
+                    slashes = 0;
+                }
+                else
+                {
+                    slashes = 0;
+                    out += c;
+                }
+            }
+            out.append(static_cast<size_t>(slashes), L'\\');
+            out += L'"';
+            return out;
+        }
+
+        struct ChildResult
+        {
+            bool        launched = false;
+            DWORD       exitCode = 0;
+            std::string stderrText;
+        };
+
+        // Spawn pack-pdf.exe in compose mode, capture its stderr (and stdout
+        // — both go to the same pipe), wait for exit. The child is run with
+        // CREATE_NO_WINDOW so no console window flashes on Pack.
+        ChildResult RunSelfCompose(const std::vector<std::string>& utf8Args)
+        {
+            ChildResult r;
+
+            const std::wstring exe = SelfExePath();
+            if (exe.empty())
+            {
+                r.stderrText = "cannot resolve own exe path";
+                return r;
+            }
+
+            std::wstring cmd = WinQuote(exe);
+            cmd += L" compose";
+            for (const auto& a : utf8Args)
+            {
+                cmd += L' ';
+                cmd += WinQuote(Utf8ToWide(a));
+            }
+
+            SECURITY_ATTRIBUTES sa{};
+            sa.nLength        = sizeof(sa);
+            sa.bInheritHandle = TRUE;
+
+            HANDLE hReadErr = nullptr;
+            HANDLE hWriteErr = nullptr;
+            if (!::CreatePipe(&hReadErr, &hWriteErr, &sa, 0))
+            {
+                r.stderrText = "CreatePipe failed";
+                return r;
+            }
+            // Keep the read end private to the parent so the child does not
+            // also inherit it (would leave the pipe open after the child
+            // exits and stall ReadFile in the loop below).
+            ::SetHandleInformation(hReadErr, HANDLE_FLAG_INHERIT, 0);
+
+            STARTUPINFOW si{};
+            si.cb         = sizeof(si);
+            si.dwFlags    = STARTF_USESTDHANDLES;
+            si.hStdInput  = nullptr;
+            si.hStdOutput = hWriteErr;
+            si.hStdError  = hWriteErr;
+
+            PROCESS_INFORMATION pi{};
+            std::vector<wchar_t> mutableCmd(cmd.begin(), cmd.end());
+            mutableCmd.push_back(L'\0');
+
+            BOOL ok = ::CreateProcessW(exe.c_str(), mutableCmd.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
+
+            // Drop the parent's copy of the write end immediately; otherwise
+            // ReadFile keeps blocking even after the child closes its end.
+            ::CloseHandle(hWriteErr);
+
+            if (!ok)
+            {
+                ::CloseHandle(hReadErr);
+                r.stderrText = "CreateProcess failed";
+                return r;
+            }
+            r.launched = true;
+
+            char buf[4096];
+            DWORD got = 0;
+            while (::ReadFile(hReadErr, buf, sizeof(buf), &got, nullptr) && got > 0)
+            {
+                r.stderrText.append(buf, got);
+            }
+            ::CloseHandle(hReadErr);
+
+            ::WaitForSingleObject(pi.hProcess, INFINITE);
+            ::GetExitCodeProcess(pi.hProcess, &r.exitCode);
+            ::CloseHandle(pi.hProcess);
+            ::CloseHandle(pi.hThread);
+            return r;
         }
 #else
         std::filesystem::path ConfigPath()
@@ -402,6 +497,14 @@ namespace packpdf
         std::string DesktopPathUtf8() { return {}; }
         std::string PickFolderDialog(const std::string&) { return {}; }
         bool OpenInExplorer(const std::string&) { return false; }
+
+        struct ChildResult { bool launched = false; int exitCode = 0; std::string stderrText; };
+        ChildResult RunSelfCompose(const std::vector<std::string>&)
+        {
+            ChildResult r;
+            r.stderrText = "subprocess compose only supported on Windows";
+            return r;
+        }
 #endif
     }
 
@@ -479,12 +582,9 @@ namespace packpdf
     {
         for (int i = 0; i < count; ++i)
         {
-            std::optional<FileExtension> ft = FileTypeFromExtension(paths[i]);
+            std::optional<FileExtension> ft = FileExtensionFromPath(paths[i]);
             if (!ft) continue; // unsupported extension, drop silently
-            Segment s{};
-            s.path = paths[i];
-            s.fileType = *ft;
-            m_Segments.push_back(std::move(s));
+            m_Rows.push_back(MakeRowFromPath(paths[i], *ft));
         }
     }
 
@@ -588,9 +688,7 @@ namespace packpdf
         SaveConfig();
     }
 
-    void AppMainWindow::ShowMessageDialog(std::string msg,
-                                          std::string buttonLabel,
-                                          std::string openPath)
+    void AppMainWindow::ShowMessageDialog(std::string msg, std::string buttonLabel, std::string openPath)
     {
         m_NoticeMessage   = std::move(msg);
         m_NoticeButton    = std::move(buttonLabel);
@@ -640,7 +738,7 @@ namespace packpdf
             Ui::RightAlignCursorX(clearW);
             if (ImGui::Button("Clear", UiSize::InterfaceButtonSmall))
             {
-                m_Segments.clear();
+                m_Rows.clear();
                 m_SelectedIndex = -1;
             }
         }
@@ -657,7 +755,7 @@ namespace packpdf
                             + ImGui::GetFrameHeight();
 
         ImGui::BeginChild("Timeline", ImVec2(0, -footerH), true);
-        if (m_Segments.empty())
+        if (m_Rows.empty())
         {
             ImGui::TextDisabled("(Empty)");
         }
@@ -675,23 +773,20 @@ namespace packpdf
             int moveUpIdx   = -1;
             int moveDownIdx = -1;
             int removeIdx   = -1;
-            const int last = static_cast<int>(m_Segments.size()) - 1;
+            const int last = static_cast<int>(m_Rows.size()) - 1;
 
-            // Pre-pass: mark each segment that is the auto-merge partner of
-            // the previous segment. Pairs consume two indices; the third
-            // landscape (if any) starts a fresh group.
-            std::vector<bool> mergeForced(m_Segments.size(), false);
-            for (size_t k = 0; k < m_Segments.size(); )
+            // Pre-pass: mark each row that is the auto-merge partner of the
+            // previous row. Pairs consume two indices; the third landscape (if
+            // any) starts a fresh group.
+            std::vector<bool> mergeForced(m_Rows.size(), false);
+            for (size_t k = 0; k < m_Rows.size(); )
             {
-                const auto& cur = m_Segments[k];
-                if (cur.fileType == FileExtension::JPEG
-                    && IsLandscapeMode(cur.orientation)
-                    && cur.autoMerge
-                    && k + 1 < m_Segments.size())
+                const auto* curImg = std::get_if<ImageOptions>(&m_Rows[k].options);
+                if (curImg && IsLandscapeMode(curImg->orientation) && curImg->autoMerge
+                    && k + 1 < m_Rows.size())
                 {
-                    const auto& nxt = m_Segments[k + 1];
-                    if (nxt.fileType == FileExtension::JPEG
-                        && IsLandscapeMode(nxt.orientation))
+                    const auto* nxtImg = std::get_if<ImageOptions>(&m_Rows[k + 1].options);
+                    if (nxtImg && IsLandscapeMode(nxtImg->orientation))
                     {
                         mergeForced[k + 1] = true;
                         k += 2;
@@ -701,14 +796,13 @@ namespace packpdf
                 ++k;
             }
 
-            // Pre-pass: starting output page number for each segment.
-            // Auto-merge partners share the leader's page (no advance).
-            std::vector<int> startPage(m_Segments.size(), 0);
+            // Pre-pass: starting output page number for each row. Auto-merge
+            // partners share the leader's page (no advance).
+            std::vector<int> startPage(m_Rows.size(), 0);
             {
                 int next = 1;
-                for (size_t k = 0; k < m_Segments.size(); ++k)
+                for (size_t k = 0; k < m_Rows.size(); ++k)
                 {
-                    const auto& cur = m_Segments[k];
                     if (mergeForced[k] && k > 0)
                     {
                         startPage[k] = startPage[k - 1];  // no advance
@@ -717,19 +811,15 @@ namespace packpdf
                     startPage[k] = next;
 
                     int pages = 0;
-                    if (cur.fileType == FileExtension::PDF)
+                    if (const auto* pdf = std::get_if<PDFOptions>(&m_Rows[k].options))
                     {
-                        auto it = m_PdfPageCounts.find(cur.path);
+                        const std::string& path = m_Rows[k].path;
+                        auto it = m_PdfPageCounts.find(path);
                         if (it == m_PdfPageCounts.end())
                         {
-                            it = m_PdfPageCounts.emplace(
-                                cur.path,
-                                GetPdfPageCount(Utf8ToPath(cur.path))).first;
+                            it = m_PdfPageCounts.emplace(path, GetPdfPageCount(Utf8ToPath(path))).first;
                         }
-                        pages = PdfSelectedPageCount(it->second,
-                                                     cur.pageSelection,
-                                                     cur.rangeFirst,
-                                                     cur.rangeLast);
+                        pages = PdfSelectedPageCount(it->second, pdf->pageSelection, pdf->rangeFirst, pdf->rangeLast);
                     }
                     else
                     {
@@ -739,38 +829,42 @@ namespace packpdf
                 }
             }
 
-            for (size_t i = 0; i < m_Segments.size(); ++i)
+            for (size_t i = 0; i < m_Rows.size(); ++i)
             {
                 const int idx = static_cast<int>(i);
                 ImGui::PushID(idx);
-                auto& seg = m_Segments[i];
+                auto& row = m_Rows[i];
                 bool selected = (m_SelectedIndex == idx);
 
                 // Page number is overlaid on the badge's dark left section.
                 // Merge partners pass 0 → leader carries the number for the
                 // pair, partner's slot stays blank.
                 const int pageNum = mergeForced[i] ? 0 : startPage[i];
-                DrawFileTypeIcon(seg.fileType, pageNum);
+                const FileExtension ext = RowFileExtension(row);
+                DrawFileTypeIcon(ext, pageNum);
                 ImGui::SameLine();
 
-                // Per-file-type options sit between the path and the
-                // up/down/remove buttons. Reserve the WIDER of the two
-                // selector kinds for every row so the trailing column lines
-                // up across PDF and image rows alike. Whichever selector is
-                // narrower simply leaves whitespace inside the slot.
-                const float selectorW = std::max(PageRangeSelectorWidth(seg),
-                                                 ImageOptionsSelectorWidth(seg))
-                                      + spacing;
+                // Reserve the wider of the two selector widths so the trailing
+                // button column lines up across PDF and image rows alike.
+                float selectorW = 0.0f;
+                if (const auto* pdf = std::get_if<PDFOptions>(&row.options))
+                {
+                    selectorW = std::max(PDFPageRangeSelectorWidth(*pdf), ImageOptionsSelectorWidth(ImageOptions{})) + spacing;
+                }
+                else
+                {
+                    const auto& img = std::get<ImageOptions>(row.options);
+                    selectorW = std::max(PDFPageRangeSelectorWidth(PDFOptions{}), ImageOptionsSelectorWidth(img)) + spacing;
+                }
 
                 float availW = ImGui::GetContentRegionAvail().x - trailingW - selectorW;
                 if (availW < 1.0f)
                 {
                     availW = 1.0f;
                 }
-                const std::string filename = FilenameFromPath(seg.path);
+                const std::string filename = FilenameFromPath(row.path);
                 ImGui::PushStyleVar(ImGuiStyleVar_SelectableTextAlign, ImVec2(0.0f, 0.5f));
-                if (ImGui::Selectable(filename.c_str(), selected, 0,
-                                      ImVec2(availW, rowH)))
+                if (ImGui::Selectable(filename.c_str(), selected, 0, ImVec2(availW, rowH)))
                 {
                     m_SelectedIndex = idx;
                 }
@@ -779,38 +873,36 @@ namespace packpdf
 
                 if (pathHovered)
                 {
-                    if (seg.fileType == FileExtension::JPEG
-                     || seg.fileType == FileExtension::PNG)
+                    if (const auto* img = std::get_if<ImageOptions>(&row.options))
                     {
-                        if (const auto* entry = m_ImageCache.Get(seg.path))
+                        if (const auto* entry = m_ImageCache.Get(row.path))
                         {
-                            DrawHoverPreview(*entry, seg);
+                            DrawHoverPreview(*entry, row.path, *img);
                         }
                         else
                         {
-                            ImGui::SetTooltip("%s", seg.path.c_str());
+                            ImGui::SetTooltip("%s", row.path.c_str());
                         }
                     }
                     else
                     {
-                        ImGui::SetTooltip("%s", seg.path.c_str());
+                        ImGui::SetTooltip("%s", row.path.c_str());
                     }
                 }
 
                 ImGui::SameLine();
-                if (seg.fileType == FileExtension::PDF)
+                if (auto* pdf = std::get_if<PDFOptions>(&row.options))
                 {
-                    PageRangeSelector(seg);
+                    PDFPageRangeSelector(*pdf);
                 }
                 else
                 {
-                    ImageOptionsSelector(seg, mergeForced[i]);
+                    auto& img = std::get<ImageOptions>(row.options);
+                    ImageOptionsSelector(img, mergeForced[i]);
                 }
 
-                // Force trailing buttons to a fixed right-anchored column,
-                // regardless of how much the selector actually consumed.
-                // trailingW reserves "leading gap + 3 buttons + 2 inter-gaps";
-                // the visible trailing GROUP itself spans (trailingW - spacing).
+                // Right-anchor the trailing button column to a fixed width,
+                // independent of selector column actual width.
                 ImGui::SameLine();
                 Ui::RightAlignCursorX(trailingW - spacing);
 
@@ -838,7 +930,7 @@ namespace packpdf
             // index from a different action cannot bite us.
             if (moveUpIdx >= 0)
             {
-                std::swap(m_Segments[moveUpIdx], m_Segments[moveUpIdx - 1]);
+                std::swap(m_Rows[moveUpIdx], m_Rows[moveUpIdx - 1]);
                 if (m_SelectedIndex == moveUpIdx)
                 {
                     m_SelectedIndex = moveUpIdx - 1;
@@ -850,7 +942,7 @@ namespace packpdf
             }
             else if (moveDownIdx >= 0)
             {
-                std::swap(m_Segments[moveDownIdx], m_Segments[moveDownIdx + 1]);
+                std::swap(m_Rows[moveDownIdx], m_Rows[moveDownIdx + 1]);
                 if (m_SelectedIndex == moveDownIdx)
                 {
                     m_SelectedIndex = moveDownIdx + 1;
@@ -862,7 +954,7 @@ namespace packpdf
             }
             else if (removeIdx >= 0)
             {
-                m_Segments.erase(m_Segments.begin() + removeIdx);
+                m_Rows.erase(m_Rows.begin() + removeIdx);
                 if (m_SelectedIndex == removeIdx)
                 {
                     m_SelectedIndex = -1;
@@ -1014,45 +1106,49 @@ namespace packpdf
             ShowMessageDialog("Folder and filename are required.");
             return;
         }
-        if (m_Segments.empty())
+        if (m_Rows.empty())
         {
             ShowMessageDialog("Timeline is empty. Drop PDF / PNG / JPG files first.");
             return;
         }
 
-        // Go through Utf8ToPath so non-ASCII output dirs / filenames survive
-        // the std::string → std::filesystem::path conversion on Windows
-        // (which would otherwise be interpreted via the ANSI code page).
-        std::filesystem::path dirPath = Utf8ToPath(dir);
-
-        std::error_code ec;
-        if (!std::filesystem::exists(dirPath, ec))
+        // Build the output path as a UTF-8 string so it survives intact when
+        // the CLI subprocess parses argv (CommandLineToArgvW + UTF-8 decode).
+        // The CLI creates the parent directory itself if missing.
+        std::string outPathUtf8 = dir;
+        if (!outPathUtf8.empty()
+            && outPathUtf8.back() != '/' && outPathUtf8.back() != '\\')
         {
-            std::filesystem::create_directories(dirPath, ec);
-            if (ec)
-            {
-                ShowMessageDialog("Cannot create folder: " + ec.message());
-                return;
-            }
+            outPathUtf8 += '/';
         }
-        else if (!std::filesystem::is_directory(dirPath, ec))
+        outPathUtf8 += file;
+        std::filesystem::path outPath = Utf8ToPath(outPathUtf8);
+
+        // Same path CLI / AI agents take — fold the timeline into argv and spawn
+        // self in compose mode. GUI never touches PDFium directly.
+        std::vector<std::string> args = BuildComposeArgs(m_Rows, outPathUtf8);
+        ChildResult cr = RunSelfCompose(args);
+
+        if (!cr.launched)
         {
-            ShowMessageDialog("Path exists but is not a folder.");
+            ShowMessageDialog("Pack failed: " + cr.stderrText);
+            return;
+        }
+        if (cr.exitCode != 0)
+        {
+            std::string msg = cr.stderrText.empty()
+                ? "Pack failed (exit " + std::to_string(cr.exitCode) + ")."
+                : cr.stderrText;
+            // Trim a single trailing newline so the message dialog does not
+            // grow an extra blank line.
+            while (!msg.empty() && (msg.back() == '\n' || msg.back() == '\r'))
+            {
+                msg.pop_back();
+            }
+            ShowMessageDialog(msg);
             return;
         }
 
-        std::filesystem::path outPath = dirPath / Utf8ToPath(file);
-
-        ComposeResult result = ComposeToFile(m_Segments, outPath);
-        if (result.ok)
-        {
-            ShowMessageDialog(outPath.filename().generic_string() + " created.",
-                              "Confirm",
-                              outPath.generic_string());
-        }
-        else
-        {
-            ShowMessageDialog("Compose failed: " + result.errorMessage);
-        }
+        ShowMessageDialog(outPath.filename().generic_string() + " created.", "Confirm", outPath.generic_string());
     }
 }

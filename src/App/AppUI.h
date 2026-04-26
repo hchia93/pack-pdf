@@ -24,10 +24,7 @@ namespace packpdf
         inline float RowDropdownWidth()
         {
             const ImGuiStyle& s = ImGui::GetStyle();
-            const float widest = std::max(
-                ImGui::CalcTextSize("Landscape").x, // image orientations
-                ImGui::CalcTextSize("Exclude").x     // PDF page modes
-            );
+            const float widest = std::max(ImGui::CalcTextSize("Landscape").x, ImGui::CalcTextSize("Exclude").x);
             return widest + ImGui::GetFrameHeight() + s.FramePadding.x * 2.0f;
         }
     }
@@ -57,6 +54,30 @@ namespace packpdf
             const float h = ImGui::GetFrameHeight();
             ImGui::Dummy(ImVec2(h, h));
             return false;
+        }
+
+        // ImGui's default Button bg color, picked by interaction priority.
+        inline ImU32 ButtonBgColor(bool isHeld, bool isHovered)
+        {
+            return ImGui::GetColorU32(isHeld ? ImGuiCol_ButtonActive : isHovered ? ImGuiCol_ButtonHovered : ImGuiCol_Button);
+        }
+
+        // Self-drawn button shell. drawIcon(dl, pos, size, frameBg) paints
+        // the foreground; frameBg is forwarded so it can carve inner shapes.
+        template <typename DrawIcon>
+        bool IconButton(const char* str_id, ImVec2 size, DrawIcon&& drawIcon)
+        {
+            const ImVec2 pos       = ImGui::GetCursorScreenPos();
+            const bool   isClicked = ImGui::InvisibleButton(str_id, size);
+            const bool   isHovered = ImGui::IsItemHovered();
+            const bool   isHeld    = ImGui::IsItemActive();
+            const ImU32  frameBg   = ButtonBgColor(isHeld, isHovered);
+
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            const ImVec2 br(pos.x + size.x, pos.y + size.y);
+            dl->AddRectFilled(pos, br, frameBg, ImGui::GetStyle().FrameRounding);
+            drawIcon(dl, pos, size, frameBg);
+            return isClicked;
         }
     }
 }

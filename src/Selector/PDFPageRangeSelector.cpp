@@ -1,6 +1,6 @@
-#include "PageRangeSelector.h"
+#include "Selector/PDFPageRangeSelector.h"
 
-#include "UiStyle.h"
+#include "App/AppUI.h"
 
 #include <imgui.h>
 
@@ -22,7 +22,7 @@ namespace packpdf
         }
     }
 
-    float PageRangeSelectorWidth(const Segment& /*seg*/)
+    float PDFPageRangeSelectorWidth(const PDFOptions& /*opts*/)
     {
         // Reserve room for the int pair on every row so the combo column
         // lines up across rows even when the current mode is All.
@@ -34,26 +34,24 @@ namespace packpdf
         return comboW + gap + rangeBlock;
     }
 
-    void PageRangeSelector(Segment& seg)
+    void PDFPageRangeSelector(PDFOptions& opts)
     {
         const ImGuiStyle& s = ImGui::GetStyle();
 
-        int modeIdx = static_cast<int>(seg.pageSelection);
+        int modeIdx = static_cast<int>(opts.pageSelection);
         ImGui::SetNextItemWidth(UiSize::RowDropdownWidth());
         if (ImGui::Combo("##prsmode", &modeIdx, kModeLabels, IM_ARRAYSIZE(kModeLabels)))
         {
-            seg.pageSelection = static_cast<PageSelection>(modeIdx);
+            opts.pageSelection = static_cast<PageSelection>(modeIdx);
         }
 
         const float intW   = IntFieldWidth();
         const float frameH = ImGui::GetFrameHeight();
 
-        if (seg.pageSelection == PageSelection::All)
+        if (opts.pageSelection == PageSelection::All)
         {
-            // Pad to the same horizontal extent Range/Exclude consume so the
-            // trailing button column lines up across rows regardless of the
-            // current mode. Same pattern as ImageOptionsSelector uses to
-            // reserve the "Merge" slot.
+            // Pad to the same width Range/Exclude consume so the trailing
+            // button column lines up across rows regardless of mode.
             ImGui::SameLine(0.0f, s.ItemInnerSpacing.x);
             ImGui::Dummy(ImVec2(intW, frameH));
             ImGui::SameLine(0.0f, s.ItemInnerSpacing.x);
@@ -65,10 +63,10 @@ namespace packpdf
 
         ImGui::SameLine(0.0f, s.ItemInnerSpacing.x);
         ImGui::SetNextItemWidth(intW);
-        ImGui::InputInt("##prsfirst", &seg.rangeFirst, 0, 0);
-        if (seg.rangeFirst < 1)
+        ImGui::InputInt("##prsfirst", &opts.rangeFirst, 0, 0);
+        if (opts.rangeFirst < 1)
         {
-            seg.rangeFirst = 1;
+            opts.rangeFirst = 1;
         }
 
         ImGui::SameLine(0.0f, s.ItemInnerSpacing.x);
@@ -77,10 +75,10 @@ namespace packpdf
 
         ImGui::SameLine(0.0f, s.ItemInnerSpacing.x);
         ImGui::SetNextItemWidth(intW);
-        ImGui::InputInt("##prslast", &seg.rangeLast, 0, 0);
-        if (seg.rangeLast < seg.rangeFirst)
+        ImGui::InputInt("##prslast", &opts.rangeLast, 0, 0);
+        if (opts.rangeLast < opts.rangeFirst)
         {
-            seg.rangeLast = seg.rangeFirst;
+            opts.rangeLast = opts.rangeFirst;
         }
     }
 }

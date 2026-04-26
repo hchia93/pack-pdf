@@ -3,9 +3,9 @@
 #include <string>
 #include <unordered_map>
 
-#include "ImageCache.h"
-#include "Segment.h"
-#include "Theme.h"
+#include "App/AppTheme.h"
+#include "File/ImageCache.h"
+#include "File/TimelineRow.h"
 
 namespace packpdf
 {
@@ -30,12 +30,10 @@ namespace packpdf
         void BrowseFolder();
         void LoadConfig();
         void SaveConfig();
-        void ShowMessageDialog(std::string msg,
-                               std::string buttonLabel = "OK",
-                               std::string openPath    = {});
+        void ShowMessageDialog(std::string msg, std::string buttonLabel = "OK", std::string openPath = {});
 
-        SegmentList m_Segments;
-        int         m_SelectedIndex = -1;
+        TimelineContainer m_Rows;
+        int               m_SelectedIndex = -1;
 
         char        m_OutputDir[1024]  = {};
         char        m_OutputFile[256]  = {};

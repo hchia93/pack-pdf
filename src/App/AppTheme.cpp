@@ -1,4 +1,4 @@
-#include "Theme.h"
+#include "App/AppTheme.h"
 
 #include <imgui.h>
 
@@ -102,10 +102,7 @@ namespace packpdf
             c[ImGuiCol_ModalWindowDimBg]      = ImVec4(0, 0, 0, 0.55f);
         }
 
-        // ---- Walnut --------------------------------------------------------
-        // Warm dark brown with copper-amber accents. Inspired by indie engine
-        // IDE themes (Hazel/Cherno). Highly contrasted so the amber Header
-        // and active states pop.
+        // Walnut — warm dark brown + copper-amber accents (Hazel/Cherno style).
         void ApplyWalnut()
         {
             ImVec4* c = ImGui::GetStyle().Colors;

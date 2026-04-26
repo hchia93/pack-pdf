@@ -1,12 +1,12 @@
 #pragma once
 
-#include "Segment.h"
+#include "File/TimelineRow.h"
 
 namespace packpdf
 {
     // Inline [Mode ▼] [first] - [last]. Int fields hide when mode == All.
-    void PageRangeSelector(Segment& seg);
+    void PDFPageRangeSelector(PDFOptions& opts);
 
     // Row width with the int-pair slot reserved even when hidden.
-    float PageRangeSelectorWidth(const Segment& seg);
+    float PDFPageRangeSelectorWidth(const PDFOptions& opts);
 }

@@ -1,6 +1,6 @@
-#include "ImageCache.h"
+#include "File/ImageCache.h"
 
-#include "Composer.h"  // Utf8ToPath
+#include "File/Composer.h"  // Utf8ToPath
 
 #ifdef _WIN32
   #define WIN32_LEAN_AND_MEAN
@@ -81,9 +81,7 @@ namespace packpdf
         }
 
         int w = 0, h = 0, ch = 0;
-        unsigned char* px = stbi_load_from_memory(buf.data(),
-                                                  static_cast<int>(buf.size()),
-                                                  &w, &h, &ch, 4);
+        unsigned char* px = stbi_load_from_memory(buf.data(), static_cast<int>(buf.size()), &w, &h, &ch, 4);
         if (!px)
         {
             return false;
@@ -93,8 +91,7 @@ namespace packpdf
         glGenTextures(1, &tex);
         glBindTexture(GL_TEXTURE_2D, tex);
         glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0,
-                     GL_RGBA, GL_UNSIGNED_BYTE, px);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, px);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
