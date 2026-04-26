@@ -31,9 +31,11 @@ jobs:
           path: build/fetched
           key: fetched-${{ runner.os }}-${{ hashFiles('CMakeLists.txt') }}
 
+      - name: Export VCPKG_ROOT
+        shell: bash
+        run: echo "VCPKG_ROOT=$VCPKG_INSTALLATION_ROOT" >> "$GITHUB_ENV"
+
       - name: Configure
-        env:
-          VCPKG_ROOT: ${{ env.VCPKG_INSTALLATION_ROOT }}
         run: cmake --preset ci-windows-x64
 
       - name: Build (Release)
